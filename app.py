@@ -419,7 +419,7 @@ FUN_CONTENTS = [
     "什麼東西有頭沒有腦？🧠 火柴。",
     "一個人從飛機上掉下來，為什麼沒事？☁️ 因為他掉在草地上，不是掉在地上。",
     "吉野櫻跟八重櫻差在哪? 插在土裡",
-    "你知道什麼是最舒服的椅子嗎？ enjoy",
+    "什麼椅子最舒服？ enjoy",
     "為什麼飯不能在嘴巴裡太久? 會犯太歲",
     "甚麼成語可以包刮幼年、青年、中年跟老年? 滿門抄斬。",
     "有一個碗不管怎麼摔都摔不壞，因為? 妳不說晚安我怎麼睡。",
@@ -527,4 +527,4 @@ with st.expander("📜 歷史紀錄與管理"):
     else:
         st.info("尚無歷史紀錄。")
 
-st.caption("版本：v3.6 Hi gorgeous,looking cute today | by chunwei~")
+st.caption("版本：v3.7 Hi gorgeous,looking cute today | by chunwei~")
