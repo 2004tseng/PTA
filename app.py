@@ -5,8 +5,6 @@ import os
 import json
 
 # --- 0. 資料持久化配置 (使用本地JSON文件) ---
-# 注意：在 Streamlit + Canvas 環境中，我們無法直接使用提供的 Firestore 全局變數。
-# 此處使用本地文件儲存作為 Python Streamlit 應用程式的持久化機制。
 DATA_FILE = "period_data.json"
 
 def load_data():
@@ -23,7 +21,6 @@ def load_data():
                 ]
                 return data
         except (json.JSONDecodeError, FileNotFoundError, ValueError):
-            # 處理文件損壞或無效的情況
             pass
     return {'periods': [], 'avg_cycle': 28, 'avg_period_length': 5}
 
@@ -43,7 +40,6 @@ def save_data():
 
 
 # --- 1. 頁面設定與樣式 ---
-# 更改：頁面標題改為「薛靖諭的粉紅秘書」
 st.set_page_config(page_title="薛靖諭的粉紅秘書", page_icon="💖", layout="centered")
 
 # 使用 CSS 來美化按鈕和標題
@@ -78,7 +74,7 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 狀態初始化與刪除/儲存函式 ---
+# --- 2. 狀態初始化與平均值計算函式 ---
 
 # 載入初始數據
 initial_data = load_data()
@@ -87,11 +83,38 @@ initial_data = load_data()
 if 'periods' not in st.session_state:
     st.session_state.periods = initial_data['periods']
 if 'avg_cycle' not in st.session_state:
-    st.session_state.avg_cycle = initial_data['avg_cycle'] # 預設平均週期
+    st.session_state.avg_cycle = initial_data['avg_cycle'] 
 if 'avg_period_length' not in st.session_state:
-    st.session_state.avg_period_length = initial_data['avg_period_length'] # 預設經期平均長度
+    st.session_state.avg_period_length = initial_data['avg_period_length'] 
 if 'query_date' not in st.session_state:
     st.session_state.query_date = date.today()
+
+
+def _recalculate_averages_and_update_state():
+    """
+    【修正 Bug 的核心函式】
+    根據 current periods list 重新計算平均週期長度與平均經期長度，
+    並立即更新 session state。
+    """
+    periods = st.session_state.periods
+    
+    # 1. 重新計算平均週期長度
+    sorted_periods = sorted(periods, key=lambda x: x['start'], reverse=True)
+    start_dates = [r['start'] for r in sorted_periods]
+    
+    if len(start_dates) > 1:
+        total_cycle_length = sum((start_dates[i] - start_dates[i+1]).days for i in range(len(start_dates) - 1))
+        avg_cycle = round(total_cycle_length / (len(start_dates) - 1))
+        st.session_state.avg_cycle = avg_cycle
+    # 如果紀錄不足兩筆，則保持預設值或前一次的值
+
+    # 2. 重新計算平均經期長度
+    if len(periods) > 0:
+        total_period_length = sum((r['end'] - r['start']).days + 1 for r in periods)
+        avg_period_length = round(total_period_length / len(periods))
+        st.session_state.avg_period_length = avg_period_length
+    # 如果無紀錄，則保持預設值
+
 
 def save_period():
     """將新的經期開始日和結束日儲存到列表中，並保存到文件。"""
@@ -103,7 +126,11 @@ def save_period():
         
         if not any(r['start'] == new_start_date for r in st.session_state.periods):
             st.session_state.periods.append(new_record)
-            save_data() # <--- 新增: 保存數據
+            
+            # 【修正點】: 新增紀錄後，立刻重新計算並更新平均值
+            _recalculate_averages_and_update_state() 
+            
+            save_data() 
             st.rerun()
         else:
             st.warning("此經期開始日已存在紀錄中，請刪除舊紀錄後再新增。")
@@ -120,7 +147,11 @@ def delete_period(target_date_str):
         ]
         
         if len(st.session_state.periods) < original_length:
-            save_data() # <--- 新增: 保存數據
+            
+            # 【修正點】: 刪除紀錄後，立刻重新計算並更新平均值
+            _recalculate_averages_and_update_state()
+            
+            save_data() 
             st.success(f"已刪除紀錄：{target_date.isoformat()}")
             st.rerun()
         else:
@@ -163,8 +194,9 @@ def calculate_predictions(periods, avg_cycle, target_date):
     result = {
         'last_period_date': None,
         'next_period_start': None,
-        'avg_cycle': avg_cycle,
-        'avg_period_length': st.session_state.avg_period_length, # 使用 session state 的預設值
+        # 【修正點】: 直接讀取 session state 中已經計算好的平均值
+        'avg_cycle': st.session_state.avg_cycle,
+        'avg_period_length': st.session_state.avg_period_length, 
         'current_stage': "無紀錄",
         'stage_detail': "請新增一筆紀錄後開始推算。",
         'day_since_start': 0,
@@ -176,7 +208,7 @@ def calculate_predictions(periods, avg_cycle, target_date):
     if not periods:
         return result
 
-    # 1. 整理數據並計算平均值
+    # 1. 整理數據
     sorted_periods = sorted(periods, key=lambda x: x['start'], reverse=True)
     last_period_record = sorted_periods[0]
     last_period_date = last_period_record['start']
@@ -184,23 +216,11 @@ def calculate_predictions(periods, avg_cycle, target_date):
     result['last_period_date'] = last_period_date
     result['last_period_end_date'] = last_period_end_date
     
-    # 計算平均週期長度和平均經期長度
-    start_dates = [r['start'] for r in sorted_periods]
-    if len(start_dates) > 1:
-        # 平均週期長度
-        total_cycle_length = sum((start_dates[i] - start_dates[i+1]).days for i in range(len(start_dates) - 1))
-        avg_cycle = round(total_cycle_length / (len(start_dates) - 1))
-        st.session_state.avg_cycle = avg_cycle
-        result['avg_cycle'] = avg_cycle
-
-    # 平均經期長度 (新加入)
-    if len(periods) > 0:
-        total_period_length = sum((r['end'] - r['start']).days + 1 for r in periods)
-        avg_period_length = round(total_period_length / len(periods))
-        st.session_state.avg_period_length = avg_period_length
-        result['avg_period_length'] = avg_period_length
+    # 【修正點】: 移除此處的平均值計算，因為已經在新增/刪除時處理。
     
-    projected_menses_duration = st.session_state.avg_period_length # 使用計算出的平均經期長度
+    # 讀取用於預測的最新平均值
+    current_avg_cycle = st.session_state.avg_cycle
+    projected_menses_duration = st.session_state.avg_period_length 
 
     # 3. 判斷目標日期的階段
     
@@ -213,7 +233,7 @@ def calculate_predictions(periods, avg_cycle, target_date):
         result['stage_detail'] = f"查詢日 ({target_date.isoformat()}) 早於最近的經期紀錄 ({last_period_date.isoformat()})。"
         
         # 預計下次經期 (基於上次紀錄)
-        projected_next_period_start = last_period_date + timedelta(days=avg_cycle)
+        projected_next_period_start = last_period_date + timedelta(days=current_avg_cycle)
         result['next_period_start'] = projected_next_period_start
         result['days_to_next_period'] = (projected_next_period_start - target_date).days if projected_next_period_start > target_date else None
         
@@ -223,7 +243,7 @@ def calculate_predictions(periods, avg_cycle, target_date):
         result['stage_detail'] = f"目標日屬於上次**已紀錄**的經期期間 ({last_period_date.isoformat()} - {last_period_end_date.isoformat()})。"
         
         # 預計下次經期
-        projected_next_period_start = last_period_date + timedelta(days=avg_cycle)
+        projected_next_period_start = last_period_date + timedelta(days=current_avg_cycle)
         result['next_period_start'] = projected_next_period_start
         result['days_to_next_period'] = (projected_next_period_start - target_date).days if projected_next_period_start > target_date else 0
         
@@ -231,14 +251,14 @@ def calculate_predictions(periods, avg_cycle, target_date):
         # 目標日在上次結束日之後，開始持續推算 (未來預測)
         
         # 週期內第幾天 (1 to avg_cycle)
-        day_in_projected_cycle = (day_in_entire_history - 1) % avg_cycle + 1
+        day_in_projected_cycle = (day_in_entire_history - 1) % current_avg_cycle + 1
         
         # 找出目標日所在的預計週期開始日 (P.C.S)
-        cycles_passed = (day_in_entire_history - 1) // avg_cycle
-        projected_cycle_start = last_period_date + timedelta(days=cycles_passed * avg_cycle)
+        cycles_passed = (day_in_entire_history - 1) // current_avg_cycle
+        projected_cycle_start = last_period_date + timedelta(days=cycles_passed * current_avg_cycle)
         
         # 找出下一個預計週期開始日 (P.N.P.S)
-        projected_next_period_start = projected_cycle_start + timedelta(days=avg_cycle)
+        projected_next_period_start = projected_cycle_start + timedelta(days=current_avg_cycle)
         
         # 設定預測日期和天數
         result['days_to_next_period'] = (projected_next_period_start - target_date).days
@@ -252,32 +272,31 @@ def calculate_predictions(periods, avg_cycle, target_date):
         projected_fertile_start = projected_ovulation_date - timedelta(days=5)
         projected_fertile_end = projected_ovulation_date
         
-        # --- 階段判斷主邏輯 (V3.2 最終修正：加入對「預計經期結束日」的判斷) ---
+        # --- 階段判斷主邏輯 ---
 
         # 1. 最高優先級：檢查目標日是否落在預計經期期間
         if target_date >= projected_cycle_start and target_date <= projected_menses_end:
             result['current_stage'] = (f"🔴 **月經期** (預計週期日 {day_in_projected_cycle})")
             result['stage_detail'] = "查詢日落在預計經期期間。"
             
-        # 2. 檢查週期是否延遲 (目標日已經超過了下一次預計經期開始日 P.N.P.S)
+        # 2. 檢查週期是否延遲 
         elif target_date >= projected_next_period_start:
-             # 注意：projected_cycle_start 已經被 Menses 檢查覆蓋，所以這裡只會捕捉到延遲的情況
              result['current_stage'] = (f"⚠️ **週期可能延遲** (第 {day_in_projected_cycle} 天)")
              result['stage_detail'] = "請注意，預計經期已過，建議留意身體狀況，並新增最新紀錄。"
              result['days_to_next_period'] = 0
              
-        # 3. 檢查黃體期 (Luteal Phase: Ovulation End + 1 ~ PNPS - 1)
+        # 3. 檢查黃體期
         elif target_date > projected_fertile_end:
             result['current_stage'] = (f"🔵 **黃體期** (預計週期日 {day_in_projected_cycle})")
             days_to_next_period_luteal = (projected_next_period_start - target_date).days
             result['stage_detail'] = f"妳正在預計週期日 **{day_in_projected_cycle}**，正值黃體期，離下次經期還有約 {days_to_next_period_luteal} 天。"
 
-        # 4. 檢查排卵期 (Ovulation/Fertile Phase: Fertile Start ~ Fertile End)
+        # 4. 檢查排卵期
         elif target_date >= projected_fertile_start and target_date <= projected_fertile_end:
             result['current_stage'] = (f"🟡 **排卵期** (預計週期日 {day_in_projected_cycle})")
             result['stage_detail'] = f"妳正在預計週期日 **{day_in_projected_cycle}**，正值排卵期，請留意身體訊號。"
         
-        # 5. 檢查濾泡期 (Follicular Phase: Last Menses End + 1 ~ Fertile Start - 1)
+        # 5. 檢查濾泡期
         elif target_date < projected_fertile_start:
             result['current_stage'] = (f"🟢 **濾泡期** (預計週期日 {day_in_projected_cycle})")
             days_to_fertile = (projected_fertile_start - target_date).days
@@ -287,12 +306,11 @@ def calculate_predictions(periods, avg_cycle, target_date):
 
 
 # --- 4. Streamlit UI 介面 ---
-# 更改：應用程式標題改為「薛靖諭的粉紅秘書」
 st.title("💖 薛靖諭的粉紅秘書")
 st.markdown("---")
 
 # 1. 輸入新的經期開始日與結束日 (隱藏式設計)
-with st.expander("🗓️ 新增經期紀錄 (開始日與結束日)"): # 1.經期紀錄改隱藏式設計 (已符合)
+with st.expander("🗓️ 新增經期紀錄 (開始日與結束日)"): 
     with st.form("new_period_form", clear_on_submit=True):
         col_start, col_end = st.columns(2)
 
@@ -319,6 +337,7 @@ with st.expander("🗓️ 新增經期紀錄 (開始日與結束日)"): # 1.經�
 # --- 4a. 今日狀態 (獨立顯示區塊 - 佈局精簡) ---
 st.subheader("--- 今日狀態 ---")
 
+# 傳遞 session state 中的 avg_cycle，確保計算使用最新值
 today_data = calculate_predictions(
     st.session_state.periods, 
     st.session_state.avg_cycle, 
@@ -337,13 +356,12 @@ if today_data['last_period_date']:
     
     # 3. 貼心小提醒
     if current_stage_for_today != "無紀錄" and "歷史查詢" not in current_stage_for_today:
-        # get_contextual_tip 內已處理特殊提醒
         tip = get_contextual_tip(current_stage_for_today) 
-        st.success(f"**💖 秘書提醒：** {tip}") # 提醒改為「秘書提醒」
+        st.success(f"**💖 秘書提醒：** {tip}")
     
     # 4. 距離下次經期
     days_to_next = today_data['days_to_next_period']
-    # 針對今天的日期進行判斷
+    
     if "週期可能延遲" in current_stage_for_today:
          st.markdown("### ⏳ **經期可能遲到，請注意身體變化。**")
     elif "月經期" in current_stage_for_today and today_data['target_date'] <= today_data['last_period_end_date']:
@@ -398,7 +416,6 @@ FUN_CONTENTS = [
 # 隨機選擇一個趣味內容
 random_fun_content = random.choice(FUN_CONTENTS)
 
-# 5. 將欄位名稱:"秘書的幽默時間"改成"錄影中請微笑"
 st.markdown(f"**😀 錄影中請微笑**")
 st.success(f"**{random_fun_content}**") 
 
@@ -406,8 +423,6 @@ st.markdown("---")
 
 
 # --- 4b. 查詢特定日期 (隱藏式設計, 移到預測結果之後) ---
-# 3. 秘書：妳想查哪一天呢欄位應該接在預計下次經期之後
-# 4. 將欄位名稱:"秘書：妳想查哪一天呢"改成"妳想查哪一天呢"
 with st.expander("🔍 妳想查哪一天呢"): 
 
     # 查詢特定日期欄位
@@ -437,20 +452,18 @@ with st.expander("🔍 妳想查哪一天呢"):
         st.info(f"查詢結果階段：**{current_stage_for_query.split('(')[0].strip()}**")
         
         # 3. 查詢日期距離下次經期約幾天
-        # 只有在非「月經期」和「週期可能延遲」且有天數時才顯示
         if "月經期" not in current_stage_for_query and "週期可能延遲" not in current_stage_for_query and query_days_to_next is not None and query_days_to_next > 0:
             st.markdown(f"### ⏳ 距離下次經期還有約 **{query_days_to_next}** 天")
         elif "月經期" in current_stage_for_query:
             # 顯示預計經期結束日
             menses_duration = query_data['avg_period_length']
-            # 計算預計經期結束日
+            
             days_since_start = (query_target_date - query_data['last_period_date']).days
             cycles_passed = days_since_start // query_data['avg_cycle']
             projected_cycle_start = query_data['last_period_date'] + timedelta(days=cycles_passed * query_data['avg_cycle'])
             
             projected_menses_end = projected_cycle_start + timedelta(days=menses_duration - 1)
             
-            # 確保只顯示在預計結束日當天或之後的天數
             if query_target_date <= projected_menses_end:
                  st.markdown(f"### 🔴 預計經期持續到 **{projected_menses_end.isoformat()}**")
             else:
@@ -466,7 +479,7 @@ with st.expander("📜 歷史紀錄與管理"):
     if st.session_state.periods:
         sorted_periods = sorted(st.session_state.periods, key=lambda x: x['start'], reverse=True)
         
-        # 顯示平均週期長度和平均經期長度
+        # 顯示平均週期長度和平均經期長度 (會顯示最新的計算結果)
         st.info(f"**💡 系統計算的平均週期：** {st.session_state.avg_cycle} 天 | **平均經期長度：** {st.session_state.avg_period_length} 天 (基於您的紀錄)")
         
         for i, p_record in enumerate(sorted_periods):
@@ -489,4 +502,4 @@ with st.expander("📜 歷史紀錄與管理"):
     else:
         st.info("尚無歷史紀錄。")
 
-st.caption("v3.4 哈囉美女 | by chunwei")
+st.caption("版本：v3.5 Hi gorgeous,looking cute today | by chunwei~")
