@@ -79,7 +79,7 @@ st.markdown(f"""
 # 載入初始數據
 initial_data = load_data()
 
-# 狀態初始化
+# 狀態初始化 (確保所有 Session State 變數都有初始值)
 if 'periods' not in st.session_state:
     st.session_state.periods = initial_data['periods']
 if 'avg_cycle' not in st.session_state:
@@ -92,7 +92,6 @@ if 'query_date' not in st.session_state:
 
 def _recalculate_averages_and_update_state():
     """
-    【修正 Bug 的核心函式】
     根據 current periods list 重新計算平均週期長度與平均經期長度，
     並立即更新 session state。
     """
@@ -106,14 +105,24 @@ def _recalculate_averages_and_update_state():
         total_cycle_length = sum((start_dates[i] - start_dates[i+1]).days for i in range(len(start_dates) - 1))
         avg_cycle = round(total_cycle_length / (len(start_dates) - 1))
         st.session_state.avg_cycle = avg_cycle
-    # 如果紀錄不足兩筆，則保持預設值或前一次的值
+    else:
+        # 如果紀錄不足兩筆，使用預設或上次載入的值
+        st.session_state.avg_cycle = 28 # Fallback to default/original load
+        
 
     # 2. 重新計算平均經期長度
     if len(periods) > 0:
         total_period_length = sum((r['end'] - r['start']).days + 1 for r in periods)
         avg_period_length = round(total_period_length / len(periods))
         st.session_state.avg_period_length = avg_period_length
-    # 如果無紀錄，則保持預設值
+    else:
+        # 如果無紀錄，使用預設或上次載入的值
+        st.session_state.avg_period_length = 5 # Fallback to default/original load
+        
+# 【核心修正點 V3.6】: 只要程式碼執行，就強制根據目前載入的 periods 重新計算平均值。
+# 這保證了即便 JSON 文件中的平均值是舊的，顯示出來的也會是根據正確 periods 列表計算的新值。
+if st.session_state.periods:
+    _recalculate_averages_and_update_state() 
 
 
 def save_period():
@@ -153,7 +162,7 @@ def delete_period(target_date_str):
             
             save_data() 
             st.success(f"已刪除紀錄：{target_date.isoformat()}")
-            st.rerun()
+            st.rerun() # 强制重新运行脚本
         else:
             st.warning("找不到要刪除的紀錄。")
     except ValueError:
@@ -194,7 +203,7 @@ def calculate_predictions(periods, avg_cycle, target_date):
     result = {
         'last_period_date': None,
         'next_period_start': None,
-        # 【修正點】: 直接讀取 session state 中已經計算好的平均值
+        # 直接讀取 session state 中已經計算好的平均值
         'avg_cycle': st.session_state.avg_cycle,
         'avg_period_length': st.session_state.avg_period_length, 
         'current_stage': "無紀錄",
@@ -215,8 +224,6 @@ def calculate_predictions(periods, avg_cycle, target_date):
     last_period_end_date = last_period_record['end']
     result['last_period_date'] = last_period_date
     result['last_period_end_date'] = last_period_end_date
-    
-    # 【修正點】: 移除此處的平均值計算，因為已經在新增/刪除時處理。
     
     # 讀取用於預測的最新平均值
     current_avg_cycle = st.session_state.avg_cycle
@@ -502,4 +509,4 @@ with st.expander("📜 歷史紀錄與管理"):
     else:
         st.info("尚無歷史紀錄。")
 
-st.caption("版本：v3.5 Hi gorgeous,looking cute today | by chunwei~")
+st.caption("版本：v3.6 Hi gorgeous,looking cute today | by chunwei~")
